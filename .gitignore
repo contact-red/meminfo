@@ -1,0 +1,4 @@
+heap_footprint/lib/
+*.o
+heap_footprint/heap_footprint_test
+*.swp
