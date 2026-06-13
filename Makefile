@@ -1,34 +1,19 @@
-# heap_footprint --- build the C shim into a static lib the Pony package links.
+# heap_footprint --- the C shim (heap_footprint/shim.c) is compiled and linked
+# automatically by ponyc; there is nothing to pre-build. The shim needs the
+# runtime's pony.h, located via the `use "cinclude:..."` line in
+# heap_footprint.pony --- update that path for your toolchain. Find it with:
 #
-# The Pony package links the shim via `use "lib:heap_footprint"` +
-# `use "path:lib"`, which resolves relative to the package directory --- so the
-# archive must live at heap_footprint/lib/libheap_footprint.a. Run `make`
-# before compiling anything that uses this package.
+#   echo "$(dirname "$(dirname "$(readlink -f "$(which ponyc)")")")/include"
 
 PKG := heap_footprint
-LIBDIR := $(PKG)/lib
-LIB := $(LIBDIR)/lib$(PKG).a
-
-CC ?= cc
-AR ?= ar
-CFLAGS ?= -O2 -fPIC -Wall -Wextra
 PONYC ?= ponyc
 
-.PHONY: all test clean
-
-all: $(LIB)
-
-$(LIB): $(PKG)/_shim.c | $(LIBDIR)
-	$(CC) $(CFLAGS) -c $< -o $(LIBDIR)/_shim.o
-	$(AR) rcs $@ $(LIBDIR)/_shim.o
-
-$(LIBDIR):
-	mkdir -p $(LIBDIR)
+.PHONY: test clean
 
 # Build and run the package's test binary.
-test: all
+test:
 	$(PONYC) $(PKG) -o $(PKG) -b $(PKG)_test
 	./$(PKG)/$(PKG)_test
 
 clean:
-	rm -rf $(LIBDIR) $(PKG)/$(PKG)_test $(PKG)/$(PKG)_test.o
+	rm -f $(PKG)/$(PKG)_test $(PKG)/$(PKG)_test.o

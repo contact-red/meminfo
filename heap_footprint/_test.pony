@@ -18,6 +18,14 @@ actor \nodoc\ Main is TestList
     test(Property1UnitTest[USize](_ArrayU8FootprintProperty))
     test(Property1UnitTest[USize](_ArrayU64FootprintProperty))
 
+    // Deep (transitive) mode.
+    test(_TestDeepStringMatchesShallow)
+    test(_TestDeepNestedSum)
+    test(_TestDeepSharingDeduped)
+    test(_TestDeepCycleTerminates)
+    test(_TestDeepActorBoundary)
+    test(Property1UnitTest[USize](_DeepArrayOfStringsProperty))
+
 class \nodoc\ _TwoWords
   """A class whose struct size we can compute by hand."""
   var a: U64 = 0
@@ -159,3 +167,131 @@ class \nodoc\ iso _ArrayU64FootprintProperty is Property1[USize]
     if n > 0 then
       ph.assert_true(f.buffer_alloc > 0)
     end
+
+// ----------------------------------------------------------------- deep mode
+
+class \nodoc\ _Pair
+  """
+  A small object graph with no sharing: an object owning a String and an
+  Array, each with its own backing buffer.
+  """
+  let label: String val
+  let nums: Array[U64]
+  new create() =>
+    label = "hello-world-foo".clone()
+    nums = [as U64: 1; 2; 3; 4; 5]
+
+class \nodoc\ _Cycle
+  var next: (_Cycle | None) = None
+  let payload: String val = "cycle-payload".clone()
+
+actor \nodoc\ _DeepDummyActor
+  be noop() => None
+
+class \nodoc\ _HoldsActor
+  let who: _DeepDummyActor
+  let label: String val
+  new create(o: _DeepDummyActor) =>
+    who = o
+    label = "the-label".clone()
+
+class \nodoc\ iso _TestDeepStringMatchesShallow is UnitTest
+  fun name(): String => "heap_footprint/deep/string_matches_shallow"
+
+  fun apply(h: TestHelper) =>
+    let s: String val = "hello world".clone()
+    let deep = HeapFootprint.deep(s)
+    // A String is one object plus one backing buffer; deep must agree with the
+    // shallow string measurement's total.
+    h.assert_eq[USize](HeapFootprint.string(s).allocated(), deep.allocated())
+    h.assert_eq[USize](1, deep.object_count)
+    h.assert_eq[USize](1, deep.buffer_count)
+    h.assert_eq[USize](0, deep.actor_refs)
+
+class \nodoc\ iso _TestDeepNestedSum is UnitTest
+  fun name(): String => "heap_footprint/deep/nested_sum"
+
+  fun apply(h: TestHelper) =>
+    let p = _Pair
+    let deep = HeapFootprint.deep(p)
+    // Cross-check the transitive total against the sum of the shallow slots of
+    // each distinct component (no sharing in _Pair).
+    let expect =
+      HeapFootprint(p).object_alloc
+        + HeapFootprint.string(p.label).allocated()
+        + HeapFootprint.array[U64](p.nums).allocated()
+    h.assert_eq[USize](expect, deep.allocated())
+    // 3 objects: the pair, the string, the array.
+    h.assert_eq[USize](3, deep.object_count)
+    // 2 buffers: the string's bytes, the array's elements.
+    h.assert_eq[USize](2, deep.buffer_count)
+
+class \nodoc\ iso _TestDeepSharingDeduped is UnitTest
+  fun name(): String => "heap_footprint/deep/sharing_deduped"
+
+  fun apply(h: TestHelper) =>
+    // The same String object referenced four times must be counted once.
+    let s: String val = "shared-value".clone()
+    let arr = [s; s; s; s]
+    let deep = HeapFootprint.deep(arr)
+    h.assert_eq[USize](2, deep.object_count) // the array + one shared string
+    let expect =
+      HeapFootprint.array[String](arr).allocated()
+        + HeapFootprint.string(s).allocated()
+    h.assert_eq[USize](expect, deep.allocated())
+
+class \nodoc\ iso _TestDeepCycleTerminates is UnitTest
+  fun name(): String => "heap_footprint/deep/cycle_terminates"
+
+  fun apply(h: TestHelper) =>
+    // A self-referential structure must terminate and count each node once.
+    let a: _Cycle ref = _Cycle
+    a.next = a
+    let deep = HeapFootprint.deep(a)
+    h.assert_eq[USize](2, deep.object_count) // the node + its payload string
+    h.assert_eq[USize](1, deep.buffer_count)
+    h.assert_true(deep.allocated() > 0)
+
+class \nodoc\ iso _TestDeepActorBoundary is UnitTest
+  fun name(): String => "heap_footprint/deep/actor_boundary"
+
+  fun apply(h: TestHelper) =>
+    let obj: _HoldsActor ref = _HoldsActor(_DeepDummyActor)
+    let deep = HeapFootprint.deep(obj)
+    // The actor is referenced but not traversed.
+    h.assert_eq[USize](1, deep.actor_refs)
+    h.assert_eq[USize](2, deep.object_count) // the holder + its label string
+    h.assert_eq[USize](1, deep.buffer_count)
+    // The actor's heap is excluded: total is just the owned data.
+    let expect =
+      HeapFootprint(obj).object_alloc
+        + HeapFootprint.string(obj.label).allocated()
+    h.assert_eq[USize](expect, deep.allocated())
+
+class \nodoc\ iso _DeepArrayOfStringsProperty is Property1[USize]
+  """
+  An Array of n distinct non-empty strings has n+1 objects (array + strings)
+  and n+1 buffers (the array's pointer storage + each string's bytes), and its
+  transitive total equals the summed shallow slots of its parts.
+  """
+  fun name(): String => "heap_footprint/deep/property/array_of_strings"
+
+  fun gen(): Generator[USize] =>
+    Generators.usize(1, 30)
+
+  fun ref property(n: USize, ph: PropertyHelper) =>
+    let arr = Array[String](n)
+    var i: USize = 0
+    while i < n do
+      arr.push("element".clone()) // each clone is a distinct object
+      i = i + 1
+    end
+    let deep = HeapFootprint.deep(arr)
+    ph.assert_eq[USize](n + 1, deep.object_count)
+    ph.assert_eq[USize](n + 1, deep.buffer_count)
+
+    var expect = HeapFootprint.array[String](arr).allocated()
+    for s in arr.values() do
+      expect = expect + HeapFootprint.string(s).allocated()
+    end
+    ph.assert_eq[USize](expect, deep.allocated())

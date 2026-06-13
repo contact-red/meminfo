@@ -5,35 +5,39 @@ required.
 
 Every heap-allocated Pony object begins with a pointer to its type descriptor,
 and the runtime keeps a global *pagemap* that maps any heap address back to the
-allocator chunk containing it. A ~40-line C shim uses those two facts to
-recover, for any object:
+allocator chunk containing it. A small C shim uses those two facts to recover,
+for any object:
 
 - the **allocator slot** the runtime reserved for it (rounded up to a size
   class — the real memory footprint), and
 - the **logical size** the compiler computed for its type.
 
-Container types (`String`, `Array`) store their elements in a *separate* heap
-allocation reached through their data pointer, so this package follows that
-pointer too and reports the backing buffer's footprint alongside the object.
+It comes in two modes:
+
+- **Shallow** (`apply`, `string`, `array`) — the object itself, plus, for
+  containers, its one backing buffer.
+- **Deep** (`deep`) — the whole reference graph: the object and every object
+  and buffer transitively reachable as owned data, each distinct allocation
+  counted once.
 
 ## Building
 
-The C shim must be compiled into a static library before you compile anything
-that uses the package:
+The shim (`heap_footprint/shim.c`) is compiled and linked automatically by
+`ponyc` — there is no library to build. It only needs the runtime's `pony.h`,
+which it reaches through the `use "cinclude:..."` line near the top of
+`heap_footprint/heap_footprint.pony`.
+
+**That path is environment-specific** (it points into your ponyc install) and
+must be updated for your toolchain. Find the right value with:
 
 ```sh
-make
+echo "$(dirname "$(dirname "$(readlink -f "$(which ponyc)")")")/include"
 ```
-
-This produces `heap_footprint/lib/libheap_footprint.a`. The package links it
-with `use "lib:heap_footprint"` + `use "path:lib"`; because relative `path:`
-locators resolve against the package directory, consumers link it
-automatically no matter where they compile from.
 
 Run the tests with:
 
 ```sh
-make test
+make test          # or: ponyc heap_footprint -b heap_footprint_test && ./heap_footprint/heap_footprint_test
 ```
 
 ## Usage
@@ -43,53 +47,73 @@ use "heap_footprint"
 
 actor Main
   new create(env: Env) =>
-    let s = "hello world".clone()
-    let f = HeapFootprint.string(s)
+    let s: String val = "hello world".clone()
 
-    env.out.print(f.string())
+    // Shallow: object + its one backing buffer.
+    env.out.print(HeapFootprint.string(s).string())
     // Footprint(allocated=64 logical=43 overhead=21
     //   [object alloc=32 size=32; buffer alloc=32 used=11])
 
-    env.out.print("allocated " + f.allocated().string() + " bytes")
+    // Deep: the whole owned reference graph.
+    env.out.print(HeapFootprint.deep(s).string())
+    // DeepFootprint(allocated=64 [objects=1 alloc=32; buffers=1 alloc=32; actor_refs=0])
 ```
 
 ### API
 
 `HeapFootprint`:
 
-- `apply(obj: Any tag): Footprint` — measure any object's own allocation.
-- `string(s: String box): Footprint` — measure a `String` plus its byte buffer.
-- `array[A](a: Array[A] box): Footprint` — measure an `Array` plus its element
+- `apply(obj: Any tag): Footprint` — shallow: the object's own allocation.
+- `string(s: String box): Footprint` — shallow: a `String` plus its byte buffer.
+- `array[A](a: Array[A] box): Footprint` — shallow: an `Array` plus its element
   buffer.
+- `deep(o: Any box): DeepFootprint` — transitive: everything reachable and
+  owned.
 
-`Footprint` (all sizes in bytes):
+`Footprint` (shallow; all sizes in bytes):
 
-- `object_alloc` — allocator slot for the object itself (`0` if not on a GC
-  heap).
-- `object_size` — the compiler's logical struct size.
-- `buffer_alloc` — allocator slot for the backing buffer (`0` if none).
-- `buffer_used` — backing-buffer bytes actually in use (`0` if none).
-- `allocated()` — `object_alloc + buffer_alloc`; the headline figure.
-- `logical()` — `object_size + buffer_used`.
-- `overhead()` — `allocated() - logical()`, saturating at `0`.
+- `object_alloc` / `object_size` — the object's slot, and its logical struct
+  size.
+- `buffer_alloc` / `buffer_used` — the backing buffer's slot, and the bytes in
+  use (`0` if none).
+- `allocated()` = `object_alloc + buffer_alloc`; `logical()` =
+  `object_size + buffer_used`; `overhead()` = the difference, saturating at `0`.
 
-## Caveats
+`DeepFootprint` (transitive; all sizes in bytes):
 
-- `object_alloc` is `0` for anything not individually heap-allocated: actors
-  (pool-allocated), `embed` fields (folded into their parent's allocation),
-  stack values, and foreign memory. Treat `object_alloc == 0` as "not a
-  distinct heap allocation" — the other figures are not a meaningful footprint
-  in that case.
-- Measurement is shallow plus one container buffer. It does **not** recurse
-  into the objects a field references. A future "deep" mode would walk the
-  reference graph via each type's trace function, summing the slot of every
-  distinct heap pointer and skipping embeds.
+- `object_alloc` / `object_count` — summed slots and number of distinct
+  descriptor-bearing objects.
+- `buffer_alloc` / `buffer_count` — summed slots and number of distinct backing
+  buffers.
+- `actor_refs` — number of distinct actors referenced (counted, not traversed).
+- `allocated()` = `object_alloc + buffer_alloc`; `count()` =
+  `object_count + buffer_count`.
+
+## Semantics and caveats
+
+- **Shallow `object_alloc` is `0`** for anything not individually
+  heap-allocated: actors (pool-allocated), `embed` fields (folded into their
+  parent), stack values, and foreign memory. Treat `object_alloc == 0` as "not
+  a distinct heap allocation".
+- **Deep stops at actor boundaries.** An actor owns its own heap, so a
+  reference to one is counted in `actor_refs` but never traversed — its memory
+  is not part of this object's footprint.
+- **Deep dedups by address**, so shared `val` substructures are counted once
+  and cycles terminate. It drives the same per-type trace functions the garbage
+  collector uses, so it sees exactly what the runtime considers owned and
+  reachable.
+- **Deep `allocated` is exact and complete**, but it does not report per-buffer
+  *utilisation* (used vs reserved): a buffer is reached as a bare pointer with
+  its owning container's fill count out of reach. Use shallow `string`/`array`
+  when you need `buffer_used`.
 
 ## How it works
 
-The shim (`heap_footprint/_shim.c`) calls two internal runtime functions —
-`ponyint_pagemap_get_chunk` and `ponyint_heap_size` — which are present in
-`libponyrt` (statically linked into every Pony executable) but absent from the
-public `pony.h`. This is the same FFI-into-the-runtime pattern the stdlib
-`time`, `net`, and `process` packages already use. The pagemap is global and
-these reads need no actor context, so they are safe from any FFI context.
+The shim (`heap_footprint/shim.c`) calls two internal runtime functions —
+`ponyint_pagemap_get_chunk` and `ponyint_heap_size` — present in `libponyrt`
+(linked into every Pony executable) but absent from the public `pony.h`. For
+deep mode it builds a private trace context whose `trace_object`/`trace_actor`
+callbacks accumulate footprint, then runs each object's existing trace
+function — the same machinery the GC uses to walk references. The pagemap is
+global and these reads need no actor context, so they are safe from any FFI
+context.
