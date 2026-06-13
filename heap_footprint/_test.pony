@@ -26,6 +26,10 @@ actor \nodoc\ Main is TestList
     test(_TestDeepActorBoundary)
     test(Property1UnitTest[USize](_DeepArrayOfStringsProperty))
 
+    // Whole-actor heap walk.
+    test(_TestActorHeapLargeDelta)
+    test(_TestActorHeapSmallDelta)
+
 class \nodoc\ _TwoWords
   """A class whose struct size we can compute by hand."""
   var a: U64 = 0
@@ -295,3 +299,40 @@ class \nodoc\ iso _DeepArrayOfStringsProperty is Property1[USize]
       expect = expect + HeapFootprint.string(s).allocated()
     end
     ph.assert_eq[USize](expect, deep.allocated())
+
+// ------------------------------------------------------ whole-actor heap walk
+
+class \nodoc\ iso _TestActorHeapLargeDelta is UnitTest
+  fun name(): String => "heap_footprint/actor/large_delta"
+
+  fun apply(h: TestHelper) =>
+    // A buffer larger than the 512-byte small-class max becomes a large
+    // allocation, so it must show up in the large-chunk list.
+    let before = HeapFootprint.actor_self()
+    let big = Array[U8](4096)
+    big.push(0)
+    let after = HeapFootprint.actor_self()
+    h.assert_true(after.large_chunks > before.large_chunks,
+      "a large allocation must add a large chunk")
+    h.assert_true(after.in_use >= (before.in_use + 4096),
+      "in_use must grow by at least the large allocation")
+    h.assert_true(after.reserved >= after.in_use)
+    h.assert_true(big.size() == 1) // keep big alive past the second measurement
+
+class \nodoc\ iso _TestActorHeapSmallDelta is UnitTest
+  fun name(): String => "heap_footprint/actor/small_delta"
+
+  fun apply(h: TestHelper) =>
+    // 200 small objects, kept alive, must add at least 200 used small slots.
+    let before = HeapFootprint.actor_self()
+    let keep = Array[_TwoWords](200)
+    var i: USize = 0
+    while i < 200 do
+      keep.push(_TwoWords)
+      i = i + 1
+    end
+    let after = HeapFootprint.actor_self()
+    h.assert_true(after.small_slots_used >= (before.small_slots_used + 200),
+      "200 small objects must add >= 200 used slots")
+    h.assert_true(after.in_use > before.in_use)
+    h.assert_true(keep.size() == 200) // keep them alive

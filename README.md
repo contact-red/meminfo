@@ -19,6 +19,8 @@ It comes in two modes:
 - **Deep** (`deep`) — the whole reference graph: the object and every object
   and buffer transitively reachable as owned data, each distinct allocation
   counted once.
+- **Whole-actor** (`actor_self`) — the running actor's entire heap, by walking
+  its allocator chunk lists; no runtime-stats build required.
 
 ## Building
 
@@ -89,6 +91,23 @@ actor Main
 - `allocated()` = `object_alloc + buffer_alloc`; `count()` =
   `object_count + buffer_count`.
 
+`HeapFootprint.actor_self(): ActorHeap` — the running actor's whole heap (all
+sizes in bytes):
+
+- `in_use` — live bytes: occupied small-area slots plus large allocations.
+- `reserved` — pool memory backing active chunks (a full block per small chunk
+  plus each large allocation); always `>= in_use`.
+- `small_chunks` / `large_chunks` — chunk counts.
+- `small_slots_used` — occupied small-area slots; `allocations()` adds the large
+  chunks; `overhead()` = `reserved - in_use`.
+
+```pony
+// inside any behaviour of the actor you want to measure:
+env.out.print(HeapFootprint.actor_self().string())
+// ActorHeap(in_use=8224 reserved=10240 overhead=2016
+//   [small_chunks=8 slots=105; large_chunks=1])
+```
+
 ## Semantics and caveats
 
 - **Shallow `object_alloc` is `0`** for anything not individually
@@ -106,6 +125,16 @@ actor Main
   *utilisation* (used vs reserved): a buffer is reached as a bare pointer with
   its owning container's fill count out of reach. Use shallow `string`/`array`
   when you need `buffer_used`.
+- **`actor_self` measures only the current actor.** It reads
+  `pony_ctx()->current` and walks that actor's chunk lists, so by construction
+  you can only measure whoever is running — call it from inside the actor's own
+  behaviours. Another actor's lists mutate under its scheduler thread and must
+  not be walked from outside; there is deliberately no API to point it
+  elsewhere. (GC never runs mid-behaviour, so the snapshot is consistent.)
+- **`actor_self` couples to the allocator layout.** Unlike the rest of the
+  package, it mirrors private `chunk_t`/`heap_t` layout (`heap.c`/`heap.h`) and
+  the `POOL_ALIGN`/size-class constants. If a future runtime changes those, the
+  ABI comment in `shim.c` marks where to fix it.
 
 ## How it works
 

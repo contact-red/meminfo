@@ -54,6 +54,7 @@ use @hf_alloc_size[USize](o: Any tag)
 use @hf_logical_size[USize](o: Any tag)
 use @hf_addr_alloc_size[USize](addr: USize)
 use @hf_deep_measure[None](root: Any box, out: Pointer[USize] tag)
+use @hf_actor_self_measure[None](out: Pointer[USize] tag)
 
 primitive HeapFootprint
   """
@@ -108,6 +109,27 @@ primitive HeapFootprint
     let out = Array[USize].init(0, 5)
     @hf_deep_measure(o, out.cpointer())
     DeepFootprint._create(
+      try out(0)? else 0 end,
+      try out(1)? else 0 end,
+      try out(2)? else 0 end,
+      try out(3)? else 0 end,
+      try out(4)? else 0 end)
+
+  fun actor_self(): ActorHeap =>
+    """
+    Measure the whole heap of the currently-running actor by walking its
+    allocator chunk lists. Works on any build --- it needs no runtime-stats
+    flag --- and reports both the bytes in use and the bytes reserved from the
+    pool.
+
+    Call this from inside one of the actor's own behaviours: it measures
+    whoever is running, which is always safe. Another actor's heap mutates
+    under its own scheduler thread and must not be walked from outside, so
+    there is deliberately no way to point this at a different actor.
+    """
+    let out = Array[USize].init(0, 5)
+    @hf_actor_self_measure(out.cpointer())
+    ActorHeap._create(
       try out(0)? else 0 end,
       try out(1)? else 0 end,
       try out(2)? else 0 end,
@@ -248,5 +270,61 @@ class val DeepFootprint is Stringable
         .>append("; buffers=").>append(buffer_count.string())
         .>append(" alloc=").>append(buffer_alloc.string())
         .>append("; actor_refs=").>append(actor_refs.string())
+        .>append("])")
+    end
+
+class val ActorHeap is Stringable
+  """
+  A snapshot of the currently-running actor's whole heap, taken by walking its
+  allocator chunk lists. All sizes are in bytes. The free-chunk recycle cache
+  is not included.
+  """
+  let in_use: USize
+    """Live bytes in use: occupied small-area slots plus large allocations."""
+
+  let reserved: USize
+    """
+    Pool memory backing the actor's active chunks: a full block per small chunk
+    plus each large allocation. Always `>= in_use`.
+    """
+
+  let small_chunks: USize
+    """Number of small-area chunks (1 KB blocks) the actor holds."""
+
+  let large_chunks: USize
+    """Number of large (> 512 byte) allocations."""
+
+  let small_slots_used: USize
+    """Number of occupied slots in the small area (small live allocations)."""
+
+  new val _create(in_use': USize, reserved': USize, small_chunks': USize,
+    large_chunks': USize, small_slots_used': USize)
+  =>
+    in_use = in_use'
+    reserved = reserved'
+    small_chunks = small_chunks'
+    large_chunks = large_chunks'
+    small_slots_used = small_slots_used'
+
+  fun allocations(): USize =>
+    """Total live allocations: small slots in use plus large chunks."""
+    small_slots_used + large_chunks
+
+  fun overhead(): USize =>
+    """
+    Reserved bytes not currently in use --- size-class slack and partly-filled
+    chunks. Saturates at `0`.
+    """
+    if reserved >= in_use then reserved - in_use else 0 end
+
+  fun string(): String iso^ =>
+    recover
+      String
+        .>append("ActorHeap(in_use=").>append(in_use.string())
+        .>append(" reserved=").>append(reserved.string())
+        .>append(" overhead=").>append(overhead().string())
+        .>append(" [small_chunks=").>append(small_chunks.string())
+        .>append(" slots=").>append(small_slots_used.string())
+        .>append("; large_chunks=").>append(large_chunks.string())
         .>append("])")
     end
