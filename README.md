@@ -1,4 +1,4 @@
-# heap_footprint
+# meminfo
 
 Measure how much heap a Pony object actually occupies — no compiler changes
 required.
@@ -24,10 +24,10 @@ It comes in two modes:
 
 ## Building
 
-The shim (`heap_footprint/shim.c`) is compiled and linked automatically by
+The shim (`meminfo/shim.c`) is compiled and linked automatically by
 `ponyc` — there is no library to build. It only needs the runtime's `pony.h`,
 which it reaches through the `use "cinclude:..."` line near the top of
-`heap_footprint/heap_footprint.pony`.
+`meminfo/meminfo.pony`.
 
 **That path is environment-specific** (it points into your ponyc install) and
 must be updated for your toolchain. Find the right value with:
@@ -39,31 +39,31 @@ echo "$(dirname "$(dirname "$(readlink -f "$(which ponyc)")")")/include"
 Run the tests with:
 
 ```sh
-make test          # or: ponyc heap_footprint -b heap_footprint_test && ./heap_footprint/heap_footprint_test
+make test          # or: ponyc meminfo -b meminfo_test && ./meminfo/meminfo_test
 ```
 
 ## Usage
 
 ```pony
-use "heap_footprint"
+use "meminfo"
 
 actor Main
   new create(env: Env) =>
     let s: String val = "hello world".clone()
 
     // Shallow: object + its one backing buffer.
-    env.out.print(HeapFootprint.string(s).string())
+    env.out.print(MemInfo.string(s).string())
     // Footprint(allocated=64 logical=43 overhead=21
     //   [object alloc=32 size=32; buffer alloc=32 used=11])
 
     // Deep: the whole owned reference graph.
-    env.out.print(HeapFootprint.deep(s).string())
+    env.out.print(MemInfo.deep(s).string())
     // DeepFootprint(allocated=64 [objects=1 alloc=32; buffers=1 alloc=32; actor_refs=0])
 ```
 
 ### API
 
-`HeapFootprint`:
+`MemInfo`:
 
 - `apply(obj: Any tag): Footprint` — shallow: the object's own allocation.
 - `string(s: String box): Footprint` — shallow: a `String` plus its byte buffer.
@@ -91,7 +91,7 @@ actor Main
 - `allocated()` = `object_alloc + buffer_alloc`; `count()` =
   `object_count + buffer_count`.
 
-`HeapFootprint.actor_self(): ActorHeap` — the running actor's whole heap (all
+`MemInfo.actor_self(): ActorHeap` — the running actor's whole heap (all
 sizes in bytes):
 
 - `in_use` — live bytes: occupied small-area slots plus large allocations.
@@ -103,7 +103,7 @@ sizes in bytes):
 
 ```pony
 // inside any behaviour of the actor you want to measure:
-env.out.print(HeapFootprint.actor_self().string())
+env.out.print(MemInfo.actor_self().string())
 // ActorHeap(in_use=8224 reserved=10240 overhead=2016
 //   [small_chunks=8 slots=105; large_chunks=1])
 ```
@@ -138,7 +138,7 @@ env.out.print(HeapFootprint.actor_self().string())
 
 ## How it works
 
-The shim (`heap_footprint/shim.c`) calls two internal runtime functions —
+The shim (`meminfo/shim.c`) calls two internal runtime functions —
 `ponyint_pagemap_get_chunk` and `ponyint_heap_size` — present in `libponyrt`
 (linked into every Pony executable) but absent from the public `pony.h`. For
 deep mode it builds a private trace context whose `trace_object`/`trace_actor`

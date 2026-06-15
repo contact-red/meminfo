@@ -1,5 +1,5 @@
 """
-# heap_footprint
+# meminfo
 
 Measure the amount of heap a Pony object actually occupies, without any
 compiler changes.
@@ -19,14 +19,14 @@ pointer too and reports the backing buffer's footprint alongside the object's.
 `deep` goes further, following the whole reference graph (see `DeepFootprint`).
 
 ```pony
-use "heap_footprint"
+use "meminfo"
 
 actor Main
   new create(env: Env) =>
     let s: String val = "hello world".clone()
-    let shallow = HeapFootprint.string(s) // object + its byte buffer
+    let shallow = MemInfo.string(s) // object + its byte buffer
     env.out.print(shallow.string())
-    let deep = HeapFootprint.deep(s)      // the whole owned reference graph
+    let deep = MemInfo.deep(s)      // the whole owned reference graph
     env.out.print(deep.string())
 ```
 
@@ -50,13 +50,13 @@ runtime's `pony.h`, which the `cinclude` below points at.
 // ponyup install it is `<...>/ponyup/<toolchain>/include`.
 use "cinclude:/home/red/.local/share/ponyup/ponyc-clang-0.64.0-x86_64-linux-ubuntu24.04/include"
 
-use @hf_alloc_size[USize](o: Any tag)
-use @hf_logical_size[USize](o: Any tag)
-use @hf_addr_alloc_size[USize](addr: USize)
-use @hf_deep_measure[None](root: Any box, out: Pointer[USize] tag)
-use @hf_actor_self_measure[None](out: Pointer[USize] tag)
+use @mi_alloc_size[USize](o: Any tag)
+use @mi_logical_size[USize](o: Any tag)
+use @mi_addr_alloc_size[USize](addr: USize)
+use @mi_deep_measure[None](root: Any box, out: Pointer[USize] tag)
+use @mi_actor_self_measure[None](out: Pointer[USize] tag)
 
-primitive HeapFootprint
+primitive MemInfo
   """
   Measures the heap footprint of an object.
 
@@ -68,15 +68,15 @@ primitive HeapFootprint
     Measure any object, reporting its own allocation only. Container backing
     buffers are not followed --- use `string` or `array` for those.
     """
-    Footprint._create(@hf_alloc_size(obj), @hf_logical_size(obj))
+    Footprint._create(@mi_alloc_size(obj), @mi_logical_size(obj))
 
   fun string(s: String box): Footprint =>
     """
     Measure a `String`, including its backing byte buffer.
     """
     let p = s.cpointer()
-    let buf_alloc = if p.is_null() then 0 else @hf_addr_alloc_size(p.usize()) end
-    Footprint._create(@hf_alloc_size(s), @hf_logical_size(s), buf_alloc, s.size())
+    let buf_alloc = if p.is_null() then 0 else @mi_addr_alloc_size(p.usize()) end
+    Footprint._create(@mi_alloc_size(s), @mi_logical_size(s), buf_alloc, s.size())
 
   fun array[A](a: Array[A] box): Footprint =>
     """
@@ -90,9 +90,9 @@ primitive HeapFootprint
         (USize(0), USize(0))
       else
         let elem_size = a.cpointer(1).usize() - p.usize()
-        (@hf_addr_alloc_size(p.usize()), a.size() * elem_size)
+        (@mi_addr_alloc_size(p.usize()), a.size() * elem_size)
       end
-    Footprint._create(@hf_alloc_size(a), @hf_logical_size(a), buf_alloc, buf_used)
+    Footprint._create(@mi_alloc_size(a), @mi_logical_size(a), buf_alloc, buf_used)
 
   fun deep(o: Any box): DeepFootprint =>
     """
@@ -107,7 +107,7 @@ primitive HeapFootprint
     duration of this synchronous call.
     """
     let out = Array[USize].init(0, 5)
-    @hf_deep_measure(o, out.cpointer())
+    @mi_deep_measure(o, out.cpointer())
     DeepFootprint._create(
       try out(0)? else 0 end,
       try out(1)? else 0 end,
@@ -128,7 +128,7 @@ primitive HeapFootprint
     there is deliberately no way to point this at a different actor.
     """
     let out = Array[USize].init(0, 5)
-    @hf_actor_self_measure(out.cpointer())
+    @mi_actor_self_measure(out.cpointer())
     ActorHeap._create(
       try out(0)? else 0 end,
       try out(1)? else 0 end,

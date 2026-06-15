@@ -19,7 +19,7 @@ extern size_t ponyint_heap_size(chunk_t* chunk);
 // The allocator slot reserved for the allocation containing addr, or 0 if addr
 // is not on a GC heap. The pagemap is global and these reads need no actor
 // context, so this is safe to call from any FFI context.
-static size_t hf_slot(const void* addr)
+static size_t mi_slot(const void* addr)
 {
   if(addr == NULL)
     return 0;
@@ -37,22 +37,22 @@ static size_t hf_slot(const void* addr)
 // Slot reserved for an object passed by reference. 0 if the object is not
 // individually heap-allocated (actors are pool-allocated; embeds, stack values
 // and foreign memory are not in the pagemap).
-size_t hf_alloc_size(void* p)
+size_t mi_alloc_size(void* p)
 {
-  return hf_slot(p);
+  return mi_slot(p);
 }
 
 // Slot reserved for a raw backing-buffer address (e.g. from String/Array
 // cpointer()). 0 if not on a GC heap.
-size_t hf_addr_alloc_size(size_t addr)
+size_t mi_addr_alloc_size(size_t addr)
 {
-  return hf_slot((const void*)addr);
+  return mi_slot((const void*)addr);
 }
 
 // The logical size the compiler computed for p's type (the descriptor's size
 // field). Valid for any object or actor: the first word is always a descriptor
 // pointer.
-size_t hf_logical_size(void* p)
+size_t mi_logical_size(void* p)
 {
   return (*(pony_type_t**)p)->size;
 }
@@ -66,9 +66,9 @@ typedef struct
   void** slots;
   size_t cap;   // always a power of two
   size_t count;
-} hf_ptrset_t;
+} mi_ptrset_t;
 
-static size_t hf_ptr_hash(void* p)
+static size_t mi_ptr_hash(void* p)
 {
   uintptr_t h = (uintptr_t)p;
   h ^= h >> 33;
@@ -77,22 +77,22 @@ static size_t hf_ptr_hash(void* p)
   return (size_t)h;
 }
 
-static void hf_ptrset_init(hf_ptrset_t* s)
+static void mi_ptrset_init(mi_ptrset_t* s)
 {
   s->cap = 1024;
   s->count = 0;
   s->slots = (void**)calloc(s->cap, sizeof(void*));
 }
 
-static void hf_ptrset_destroy(hf_ptrset_t* s)
+static void mi_ptrset_destroy(mi_ptrset_t* s)
 {
   free(s->slots);
   s->slots = NULL;
 }
 
-static bool hf_ptrset_add(hf_ptrset_t* s, void* p);
+static bool mi_ptrset_add(mi_ptrset_t* s, void* p);
 
-static void hf_ptrset_grow(hf_ptrset_t* s)
+static void mi_ptrset_grow(mi_ptrset_t* s)
 {
   size_t oldcap = s->cap;
   void** old = s->slots;
@@ -103,19 +103,19 @@ static void hf_ptrset_grow(hf_ptrset_t* s)
 
   for(size_t i = 0; i < oldcap; i++)
     if(old[i] != NULL)
-      hf_ptrset_add(s, old[i]);
+      mi_ptrset_add(s, old[i]);
 
   free(old);
 }
 
 // Returns true if p was newly inserted, false if it was already present.
-static bool hf_ptrset_add(hf_ptrset_t* s, void* p)
+static bool mi_ptrset_add(mi_ptrset_t* s, void* p)
 {
   if((s->count * 4) >= (s->cap * 3)) // grow past a 0.75 load factor
-    hf_ptrset_grow(s);
+    mi_ptrset_grow(s);
 
   size_t mask = s->cap - 1;
-  size_t i = hf_ptr_hash(p) & mask;
+  size_t i = mi_ptr_hash(p) & mask;
 
   while(s->slots[i] != NULL)
   {
@@ -136,10 +136,10 @@ typedef struct
 {
   void* p;
   pony_type_t* t;
-} hf_work_t;
+} mi_work_t;
 
 // The accumulator. Its leading fields mirror pony_ctx_t up through
-// trace_actor, so &hf_deep_t can be passed to the runtime's pony_trace*
+// trace_actor, so &mi_deep_t can be passed to the runtime's pony_trace*
 // functions as a pony_ctx_t* --- those read only trace_object/trace_actor.
 // Our callbacks recover this struct by casting the ctx back.
 //
@@ -148,8 +148,8 @@ typedef struct
 // these offsets are stable. The runtime never reads past trace_actor here
 // (we never call its GC mark path), so the trailing accumulator fields are
 // invisible to it.
-typedef struct hf_deep_t hf_deep_t;
-struct hf_deep_t
+typedef struct mi_deep_t mi_deep_t;
+struct mi_deep_t
 {
   void* scheduler;
   void* current;
@@ -157,8 +157,8 @@ struct hf_deep_t
   void (*trace_actor)(pony_ctx_t* ctx, pony_actor_t* actor);
   void* stack;
 
-  hf_ptrset_t visited;
-  hf_work_t* work;
+  mi_ptrset_t visited;
+  mi_work_t* work;
   size_t work_len;
   size_t work_cap;
 
@@ -169,12 +169,12 @@ struct hf_deep_t
   size_t actor_refs;
 };
 
-static void hf_work_push(hf_deep_t* d, void* p, pony_type_t* t)
+static void mi_work_push(mi_deep_t* d, void* p, pony_type_t* t)
 {
   if(d->work_len == d->work_cap)
   {
     d->work_cap = (d->work_cap == 0) ? 256 : (d->work_cap * 2);
-    d->work = (hf_work_t*)realloc(d->work, d->work_cap * sizeof(hf_work_t));
+    d->work = (mi_work_t*)realloc(d->work, d->work_cap * sizeof(mi_work_t));
   }
 
   d->work[d->work_len].p = p;
@@ -182,18 +182,18 @@ static void hf_work_push(hf_deep_t* d, void* p, pony_type_t* t)
   d->work_len++;
 }
 
-static void hf_deep_trace_object(pony_ctx_t* ctx, void* p, pony_type_t* t,
+static void mi_deep_trace_object(pony_ctx_t* ctx, void* p, pony_type_t* t,
   int m)
 {
-  hf_deep_t* d = (hf_deep_t*)ctx;
+  mi_deep_t* d = (mi_deep_t*)ctx;
 
   if(p == NULL)
     return;
 
-  if(!hf_ptrset_add(&d->visited, p)) // already counted: dedupe / cycle stop
+  if(!mi_ptrset_add(&d->visited, p)) // already counted: dedupe / cycle stop
     return;
 
-  size_t slot = hf_slot(p);
+  size_t slot = mi_slot(p);
 
   // Skip anything not on a Pony GC heap: there is nothing to count, and a real
   // Pony object is always heap-allocated, so a zero slot also means "not an
@@ -224,32 +224,32 @@ static void hf_deep_trace_object(pony_ctx_t* ctx, void* p, pony_type_t* t,
   // a container reaches its elements through its own trace function, not
   // through the buffer.
   if(is_object && (m != PONY_TRACE_OPAQUE) && (t->trace != NULL))
-    hf_work_push(d, p, t);
+    mi_work_push(d, p, t);
 }
 
-static void hf_deep_trace_actor(pony_ctx_t* ctx, pony_actor_t* a)
+static void mi_deep_trace_actor(pony_ctx_t* ctx, pony_actor_t* a)
 {
-  hf_deep_t* d = (hf_deep_t*)ctx;
+  mi_deep_t* d = (mi_deep_t*)ctx;
 
   if(a == NULL)
     return;
 
   // An actor owns its own heap; a reference to it is identity, not owned data.
   // Count distinct referenced actors but never cross the boundary.
-  if(hf_ptrset_add(&d->visited, a))
+  if(mi_ptrset_add(&d->visited, a))
     d->actor_refs++;
 }
 
 // Measure the transitive heap footprint of root. Fills a 5-element out array:
 //   out[0] object_alloc, out[1] buffer_alloc,
 //   out[2] object_count, out[3] buffer_count, out[4] actor_refs.
-void hf_deep_measure(void* root, size_t* out)
+void mi_deep_measure(void* root, size_t* out)
 {
-  hf_deep_t d;
+  mi_deep_t d;
   memset(&d, 0, sizeof(d));
-  d.trace_object = hf_deep_trace_object;
-  d.trace_actor = hf_deep_trace_actor;
-  hf_ptrset_init(&d.visited);
+  d.trace_object = mi_deep_trace_object;
+  d.trace_actor = mi_deep_trace_actor;
+  mi_ptrset_init(&d.visited);
 
   pony_ctx_t* ctx = (pony_ctx_t*)&d;
 
@@ -259,14 +259,14 @@ void hf_deep_measure(void* root, size_t* out)
     pony_type_t* t = *(pony_type_t**)root;
 
     if(t->dispatch != NULL)
-      hf_deep_trace_actor(ctx, (pony_actor_t*)root);
+      mi_deep_trace_actor(ctx, (pony_actor_t*)root);
     else
-      hf_deep_trace_object(ctx, root, t, PONY_TRACE_MUTABLE);
+      mi_deep_trace_object(ctx, root, t, PONY_TRACE_MUTABLE);
   }
 
   while(d.work_len > 0)
   {
-    hf_work_t w = d.work[--d.work_len];
+    mi_work_t w = d.work[--d.work_len];
     w.t->trace(ctx, w.p);
   }
 
@@ -276,7 +276,7 @@ void hf_deep_measure(void* root, size_t* out)
   out[3] = d.buffer_count;
   out[4] = d.actor_refs;
 
-  hf_ptrset_destroy(&d.visited);
+  mi_ptrset_destroy(&d.visited);
   free(d.work);
 }
 
@@ -291,12 +291,12 @@ void hf_deep_measure(void* root, size_t* out)
 // FREE slot) and chunk_t.next at offset 24, plus the constants below
 // (HEAP_SIZECLASSES, HEAP_RECYCLE_SIZECLASSES, POOL_ALIGN, HEAP_MIN). If the
 // runtime changes any of these, this is the place to fix it.
-#define HF_SIZECLASSES 5
-#define HF_RECYCLE 4
-#define HF_POOL_ALIGN 1024
-#define HF_HEAP_MIN 32
+#define MI_SIZECLASSES 5
+#define MI_RECYCLE 4
+#define MI_POOL_ALIGN 1024
+#define MI_HEAP_MIN 32
 
-typedef struct hf_chunk
+typedef struct mi_chunk
 {
   void* m;
   union
@@ -304,18 +304,18 @@ typedef struct hf_chunk
     struct { uint32_t slots; uint32_t shallow; uint32_t finalisers; } small;
     struct { size_t size; } large;
   } u;
-  struct hf_chunk* next;
-} hf_chunk;
+  struct mi_chunk* next;
+} mi_chunk;
 
-typedef struct hf_heap
+typedef struct mi_heap
 {
-  hf_chunk* small_free[HF_SIZECLASSES];
-  hf_chunk* small_full[HF_SIZECLASSES];
-  hf_chunk* large;
-  hf_chunk* recyclable[HF_RECYCLE];
+  mi_chunk* small_free[MI_SIZECLASSES];
+  mi_chunk* small_full[MI_SIZECLASSES];
+  mi_chunk* large;
+  mi_chunk* recyclable[MI_RECYCLE];
   size_t used;
   size_t next_gc;
-} hf_heap;
+} mi_heap;
 
 extern void* ponyint_actor_heap(void* actor);
 
@@ -327,7 +327,7 @@ extern void* ponyint_actor_heap(void* actor);
 // SAFE ONLY for the current actor: these lists mutate as the actor allocates
 // and collects. We read pony_ctx()->current, so by construction we measure
 // whoever is running --- ourselves --- and GC never runs mid-behaviour.
-void hf_actor_self_measure(size_t* out)
+void mi_actor_self_measure(size_t* out)
 {
   out[0] = out[1] = out[2] = out[3] = out[4] = 0;
 
@@ -336,19 +336,19 @@ void hf_actor_self_measure(size_t* out)
   if(actor == NULL)
     return;
 
-  hf_heap* h = (hf_heap*)ponyint_actor_heap(actor);
+  mi_heap* h = (mi_heap*)ponyint_actor_heap(actor);
 
   size_t in_use = 0, reserved = 0;
   size_t small_chunks = 0, large_chunks = 0, slots_used = 0;
 
-  for(int sc = 0; sc < HF_SIZECLASSES; sc++)
+  for(int sc = 0; sc < MI_SIZECLASSES; sc++)
   {
-    size_t slot = (size_t)HF_HEAP_MIN << sc;
-    size_t total_slots = HF_POOL_ALIGN / slot;
+    size_t slot = (size_t)MI_HEAP_MIN << sc;
+    size_t total_slots = MI_POOL_ALIGN / slot;
 
     for(int which = 0; which < 2; which++)
     {
-      hf_chunk* c = (which == 0) ? h->small_free[sc] : h->small_full[sc];
+      mi_chunk* c = (which == 0) ? h->small_free[sc] : h->small_full[sc];
 
       while(c != NULL)
       {
@@ -359,14 +359,14 @@ void hf_actor_self_measure(size_t* out)
 
         in_use += used_slots * slot;
         slots_used += used_slots;
-        reserved += HF_POOL_ALIGN;
+        reserved += MI_POOL_ALIGN;
         small_chunks++;
         c = c->next;
       }
     }
   }
 
-  for(hf_chunk* c = h->large; c != NULL; c = c->next)
+  for(mi_chunk* c = h->large; c != NULL; c = c->next)
   {
     size_t sz = ponyint_heap_size((chunk_t*)c);
     in_use += sz;
