@@ -5,3 +5,5 @@ examples/cross-actor/Makefile
 examples/cross-actor/cross-actor
 examples/push_string/Makefile
 examples/push_string/push_string
+examples/tuple_array/Makefile
+examples/tuple_array/tuple_array
