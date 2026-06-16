@@ -1,3 +1,7 @@
 *.o
 meminfo/meminfo_test
 *.swp
+examples/cross-actor/Makefile
+examples/cross-actor/cross-actor
+examples/push_string/Makefile
+examples/push_string/push_string

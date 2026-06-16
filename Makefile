@@ -1,7 +1,7 @@
 # meminfo --- the C shim (meminfo/shim.c) is compiled and linked
 # automatically by ponyc; there is nothing to pre-build. The shim needs the
 # runtime's pony.h, located via the `use "cinclude:..."` line in
-# meminfo.pony --- update that path for your toolchain. Find it with:
+# meminfo/mem_info.pony --- update that path for your toolchain. Find it with:
 #
 #   echo "$(dirname "$(dirname "$(readlink -f "$(which ponyc)")")")/include"
 
