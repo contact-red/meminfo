@@ -20,16 +20,16 @@ actor \nodoc\ Main is TestList
 //    test(Property1UnitTest[USize](_ArrayU64FootprintProperty))
 
     // Deep (transitive) mode.
-//    test(_TestDeepStringMatchesShallow)
-//    test(_TestDeepNestedSum)
-//    test(_TestDeepSharingDeduped)
-//    test(_TestDeepCycleTerminates)
-//    test(_TestDeepActorBoundary)
-//    test(Property1UnitTest[USize](_DeepArrayOfStringsProperty))
+    test(_TestDeepStringMatchesShallow)
+    test(_TestDeepNestedSum)
+    test(_TestDeepSharingDeduped)
+    test(_TestDeepCycleTerminates)
+    test(_TestDeepActorBoundary)
+    test(Property1UnitTest[USize](_DeepArrayOfStringsProperty))
 
     // Whole-actor heap walk.
-//    test(_TestActorHeapLargeDelta)
-//    test(_TestActorHeapSmallDelta)
+    test(_TestActorHeapLargeDelta)
+    test(_TestActorHeapSmallDelta)
 
 class \nodoc\ _TwoWords
   """A class whose struct size we can compute by hand."""
@@ -178,6 +178,7 @@ class \nodoc\ iso _ArrayU64FootprintProperty is Property1[USize]
     if n > 0 then
       ph.assert_true(f.buffer_alloc > 0)
     end
+*/
 
 // ----------------------------------------------------------------- deep mode
 
@@ -212,12 +213,15 @@ class \nodoc\ iso _TestDeepStringMatchesShallow is UnitTest
   fun apply(h: TestHelper) =>
     let s: String val = "hello world".clone()
     let deep = MemInfo.deep(s)
+    let shallow = MemInfo.string(s)
     // A String is one object plus one backing buffer; deep must agree with the
     // shallow string measurement's total.
-    h.assert_eq[USize](MemInfo.string(s).allocated(), deep.allocated())
-    h.assert_eq[USize](1, deep.object_count)
-    h.assert_eq[USize](1, deep.buffer_count)
-    h.assert_eq[USize](0, deep.actor_refs)
+    h.assert_eq[USize](
+      StringMem.s_alloc(shallow) + StringMem.p_alloc(shallow),
+      DeepMem.allocated(deep))
+    h.assert_eq[USize](1, DeepMem.object_count(deep))
+    h.assert_eq[USize](1, DeepMem.buffer_count(deep))
+    h.assert_eq[USize](0, DeepMem.actor_refs(deep))
 
 class \nodoc\ iso _TestDeepNestedSum is UnitTest
   fun name(): String => "meminfo/deep/nested_sum"
@@ -225,17 +229,19 @@ class \nodoc\ iso _TestDeepNestedSum is UnitTest
   fun apply(h: TestHelper) =>
     let p = _Pair
     let deep = MemInfo.deep(p)
+    let label = MemInfo.string(p.label)
+    let nums = MemInfo.array[U64](p.nums)
     // Cross-check the transitive total against the sum of the shallow slots of
     // each distinct component (no sharing in _Pair).
     let expect =
-      MemInfo(p).object_alloc
-        + MemInfo.string(p.label).allocated()
-        + MemInfo.array[U64](p.nums).allocated()
-    h.assert_eq[USize](expect, deep.allocated())
+      FlatMem.alloc(MemInfo.flat(p))
+        + (StringMem.s_alloc(label) + StringMem.p_alloc(label))
+        + (ArrayMem.s_alloc(nums) + ArrayMem.p_alloc(nums))
+    h.assert_eq[USize](expect, DeepMem.allocated(deep))
     // 3 objects: the pair, the string, the array.
-    h.assert_eq[USize](3, deep.object_count)
+    h.assert_eq[USize](3, DeepMem.object_count(deep))
     // 2 buffers: the string's bytes, the array's elements.
-    h.assert_eq[USize](2, deep.buffer_count)
+    h.assert_eq[USize](2, DeepMem.buffer_count(deep))
 
 class \nodoc\ iso _TestDeepSharingDeduped is UnitTest
   fun name(): String => "meminfo/deep/sharing_deduped"
@@ -245,11 +251,13 @@ class \nodoc\ iso _TestDeepSharingDeduped is UnitTest
     let s: String val = "shared-value".clone()
     let arr = [s; s; s; s]
     let deep = MemInfo.deep(arr)
-    h.assert_eq[USize](2, deep.object_count) // the array + one shared string
+    h.assert_eq[USize](2, DeepMem.object_count(deep)) // the array + one shared string
+    let arr_m = MemInfo.array[String](arr)
+    let s_m = MemInfo.string(s)
     let expect =
-      MemInfo.array[String](arr).allocated()
-        + MemInfo.string(s).allocated()
-    h.assert_eq[USize](expect, deep.allocated())
+      (ArrayMem.s_alloc(arr_m) + ArrayMem.p_alloc(arr_m))
+        + (StringMem.s_alloc(s_m) + StringMem.p_alloc(s_m))
+    h.assert_eq[USize](expect, DeepMem.allocated(deep))
 
 class \nodoc\ iso _TestDeepCycleTerminates is UnitTest
   fun name(): String => "meminfo/deep/cycle_terminates"
@@ -259,9 +267,9 @@ class \nodoc\ iso _TestDeepCycleTerminates is UnitTest
     let a: _Cycle ref = _Cycle
     a.next = a
     let deep = MemInfo.deep(a)
-    h.assert_eq[USize](2, deep.object_count) // the node + its payload string
-    h.assert_eq[USize](1, deep.buffer_count)
-    h.assert_true(deep.allocated() > 0)
+    h.assert_eq[USize](2, DeepMem.object_count(deep)) // the node + its payload string
+    h.assert_eq[USize](1, DeepMem.buffer_count(deep))
+    h.assert_true(DeepMem.allocated(deep) > 0)
 
 class \nodoc\ iso _TestDeepActorBoundary is UnitTest
   fun name(): String => "meminfo/deep/actor_boundary"
@@ -270,14 +278,15 @@ class \nodoc\ iso _TestDeepActorBoundary is UnitTest
     let obj: _HoldsActor ref = _HoldsActor(_DeepDummyActor)
     let deep = MemInfo.deep(obj)
     // The actor is referenced but not traversed.
-    h.assert_eq[USize](1, deep.actor_refs)
-    h.assert_eq[USize](2, deep.object_count) // the holder + its label string
-    h.assert_eq[USize](1, deep.buffer_count)
+    h.assert_eq[USize](1, DeepMem.actor_refs(deep))
+    h.assert_eq[USize](2, DeepMem.object_count(deep)) // the holder + its label string
+    h.assert_eq[USize](1, DeepMem.buffer_count(deep))
     // The actor's heap is excluded: total is just the owned data.
+    let label = MemInfo.string(obj.label)
     let expect =
-      MemInfo(obj).object_alloc
-        + MemInfo.string(obj.label).allocated()
-    h.assert_eq[USize](expect, deep.allocated())
+      FlatMem.alloc(MemInfo.flat(obj))
+        + (StringMem.s_alloc(label) + StringMem.p_alloc(label))
+    h.assert_eq[USize](expect, DeepMem.allocated(deep))
 
 class \nodoc\ iso _DeepArrayOfStringsProperty is Property1[USize]
   """
@@ -298,14 +307,16 @@ class \nodoc\ iso _DeepArrayOfStringsProperty is Property1[USize]
       i = i + 1
     end
     let deep = MemInfo.deep(arr)
-    ph.assert_eq[USize](n + 1, deep.object_count)
-    ph.assert_eq[USize](n + 1, deep.buffer_count)
+    ph.assert_eq[USize](n + 1, DeepMem.object_count(deep))
+    ph.assert_eq[USize](n + 1, DeepMem.buffer_count(deep))
 
-    var expect = MemInfo.array[String](arr).allocated()
+    let arr_m = MemInfo.array[String](arr)
+    var expect = ArrayMem.s_alloc(arr_m) + ArrayMem.p_alloc(arr_m)
     for s in arr.values() do
-      expect = expect + MemInfo.string(s).allocated()
+      let s_m = MemInfo.string(s)
+      expect = expect + StringMem.s_alloc(s_m) + StringMem.p_alloc(s_m)
     end
-    ph.assert_eq[USize](expect, deep.allocated())
+    ph.assert_eq[USize](expect, DeepMem.allocated(deep))
 
 // ------------------------------------------------------ whole-actor heap walk
 
@@ -319,11 +330,11 @@ class \nodoc\ iso _TestActorHeapLargeDelta is UnitTest
     let big = Array[U8](4096)
     big.push(0)
     let after = MemInfo.actor_self()
-    h.assert_true(after.large_chunks > before.large_chunks,
+    h.assert_true(ActorMem.large_chunks(after) > ActorMem.large_chunks(before),
       "a large allocation must add a large chunk")
-    h.assert_true(after.in_use >= (before.in_use + 4096),
+    h.assert_true(ActorMem.in_use(after) >= (ActorMem.in_use(before) + 4096),
       "in_use must grow by at least the large allocation")
-    h.assert_true(after.reserved >= after.in_use)
+    h.assert_true(ActorMem.reserved(after) >= ActorMem.in_use(after))
     h.assert_true(big.size() == 1) // keep big alive past the second measurement
 
 class \nodoc\ iso _TestActorHeapSmallDelta is UnitTest
@@ -339,8 +350,8 @@ class \nodoc\ iso _TestActorHeapSmallDelta is UnitTest
       i = i + 1
     end
     let after = MemInfo.actor_self()
-    h.assert_true(after.small_slots_used >= (before.small_slots_used + 200),
+    h.assert_true(
+      ActorMem.small_slots_used(after) >= (ActorMem.small_slots_used(before) + 200),
       "200 small objects must add >= 200 used slots")
-    h.assert_true(after.in_use > before.in_use)
+    h.assert_true(ActorMem.in_use(after) > ActorMem.in_use(before))
     h.assert_true(keep.size() == 200) // keep them alive
-*/

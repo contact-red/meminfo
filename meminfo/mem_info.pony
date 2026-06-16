@@ -16,7 +16,12 @@ given an object, recover both:
 Container types (`String`, `Array`) keep their elements in a *separate* heap
 allocation reached through their data pointer, so this package follows that
 pointer too and reports the backing buffer's footprint alongside the object's.
-`deep` goes further, following the whole reference graph (see `DeepFootprint`).
+`deep` goes further, following the whole reference graph (see `DeepMem`).
+
+Each measurement is returned as a tagged tuple --- a marker primitive followed
+by the raw figures --- and the marker primitive doubles as the namespace for
+reading the fields back out. There is no `Stringable`; read the values you want
+through the accessors.
 
 ```pony
 use "meminfo"
@@ -24,22 +29,27 @@ use "meminfo"
 actor Main
   new create(env: Env) =>
     let s: String val = "hello world".clone()
-    let shallow = MemInfo.string(s) // object + its byte buffer
-    env.out.print(shallow.string())
-    let deep = MemInfo.deep(s)      // the whole owned reference graph
-    env.out.print(deep.string())
+
+    // Shallow: the String struct plus its one backing byte buffer.
+    let m = MemInfo.string(s)
+    env.out.print("struct slot: " + StringMem.s_alloc(m).string())
+    env.out.print("buffer slot: " + StringMem.p_alloc(m).string())
+
+    // Deep: the whole owned reference graph, each allocation counted once.
+    let d = MemInfo.deep(s)
+    env.out.print("total allocated: " + DeepMem.allocated(d).string())
 ```
 
 ## Caveats
 
-* `object_alloc` is `0` for anything not individually heap-allocated: actors
-  (pool-allocated), `embed` fields (part of their parent's allocation), stack
-  values, and foreign memory. `object_alloc == 0` is the signal for "not a
+* The object's allocation slot (`FlatMem.alloc`, `StringMem.s_alloc`,
+  `ArrayMem.s_alloc`) is `0` for anything not individually heap-allocated:
+  actors (pool-allocated), `embed` fields (part of their parent's allocation),
+  stack values, and foreign memory. A `0` slot is the signal for "not a
   distinct heap allocation"; the other figures are not a meaningful footprint
   in that case.
-* `apply`/`string`/`array` are *shallow* (object plus, for containers, one
-  backing buffer). `deep` follows the whole reference graph --- see
-  `DeepFootprint`.
+* `flat`/`string`/`array` are *shallow* (object plus, for containers, one
+  backing buffer). `deep` follows the whole reference graph --- see `DeepMem`.
 
 The C shim is compiled and linked automatically by `ponyc`; it only needs the
 runtime's `pony.h`, which the `cinclude` below points at.
@@ -61,11 +71,10 @@ primitive MemInfo
   """
   Measures the heap footprint of an object.
 
-  `apply` works on any object but reports only the object's own allocation.
+  `flat` works on any object but reports only the object's own allocation.
   `string` and `array` additionally follow the container's backing buffer.
-
-_create(object_alloc': USize, buffer_alloc': USize,
-        object_count': USize, buffer_count': USize, actor_refs': USize)
+  `deep` follows the whole owned reference graph; `actor_self` walks the
+  running actor's entire heap.
   """
 
   fun flat(obj: Any tag): FlatMemType =>
@@ -102,9 +111,7 @@ _create(object_alloc': USize, buffer_alloc': USize,
       ele_size                          // Element Size
     )
 
-//    Footprint._create(@mi_alloc_size(a), @mi_logical_size(a), buf_alloc, buf_used)
-/*
-  fun deep(o: Any box): DeepFootprint =>
+  fun deep(o: Any box): DeepMemType =>
     """
     Measure the transitive heap footprint of `o`: the object itself plus every
     object and backing buffer reachable from it, each distinct allocation
@@ -118,14 +125,14 @@ _create(object_alloc': USize, buffer_alloc': USize,
     """
     let out = Array[USize].init(0, 5)
     @mi_deep_measure(o, out.cpointer())
-    DeepFootprint._create(
-      try out(0)? else 0 end,
-      try out(1)? else 0 end,
-      try out(2)? else 0 end,
-      try out(3)? else 0 end,
-      try out(4)? else 0 end)
+    (DeepMem,
+      try out(0)? else 0 end,   // object_alloc
+      try out(1)? else 0 end,   // buffer_alloc
+      try out(2)? else 0 end,   // object_count
+      try out(3)? else 0 end,   // buffer_count
+      try out(4)? else 0 end)   // actor_refs
 
-  fun actor_self(): ActorHeap =>
+  fun actor_self(): ActorMemType =>
     """
     Measure the whole heap of the currently-running actor by walking its
     allocator chunk lists. Works on any build --- it needs no runtime-stats
@@ -139,10 +146,9 @@ _create(object_alloc': USize, buffer_alloc': USize,
     """
     let out = Array[USize].init(0, 5)
     @mi_actor_self_measure(out.cpointer())
-    ActorHeap._create(
-      try out(0)? else 0 end,
-      try out(1)? else 0 end,
-      try out(2)? else 0 end,
-      try out(3)? else 0 end,
-      try out(4)? else 0 end)
-*/
+    (ActorMem,
+      try out(0)? else 0 end,   // in_use
+      try out(1)? else 0 end,   // reserved
+      try out(2)? else 0 end,   // small_chunks
+      try out(3)? else 0 end,   // large_chunks
+      try out(4)? else 0 end)   // small_slots_used
