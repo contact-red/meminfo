@@ -3,34 +3,26 @@ use "../../meminfo"
 
 actor Main
   let env: Env
-  let s: String val = "X".mul(400)
   new create(env': Env) =>
+    var s: String iso = "X".mul(516)
+    var ss: String iso = "X".mul(516)
     env = env'
-    let m = MemInfo.string(s)
+    let m = MemInfo.string(consume s)
+    env.out.print("Actor Main:")
     env.out.print(
       "string struct alloc=" + StringMem.s_alloc(m).string()
         + " buffer alloc=" + StringMem.p_alloc(m).string()
         + " used=" + StringMem.s_size(m).string())
-    Two(this, env)
-
-  be gimmie(two: Two tag) =>
-    two.receive(s)
-
-
+    Two(this, env, consume ss)
 
 
 actor Two
   let env: Env
-  new create(main: Main tag, env': Env) =>
+  new create(main: Main tag, env': Env, s: String iso) =>
     env = env'
-    _show()
-    main.gimmie(this)
-
-  be receive(s: String val) =>
-    _show()
-
-  fun _show() =>
-    let h = MemInfo.actor_self()
+    env.out.print("Actor Two:")
+    let m = MemInfo.string(consume s)
     env.out.print(
-      "actor in_use=" + ActorMem.in_use(h).string()
-        + " reserved=" + ActorMem.reserved(h).string())
+      "string struct alloc=" + StringMem.s_alloc(m).string()
+        + " buffer alloc=" + StringMem.p_alloc(m).string()
+        + " used=" + StringMem.s_size(m).string())
