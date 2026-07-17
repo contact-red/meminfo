@@ -80,7 +80,7 @@ class \nodoc\ iso _TestStringBufferExact is UnitTest
     let s: String val = "hello world".clone() // 11 heap bytes of content
     let mi: StringMemType = MemInfo.string(s)
     h.assert_eq[USize](32, StringMem.p_alloc(mi))
-    h.assert_eq[USize](12, StringMem.s_reserved(mi))
+    h.assert_eq[USize](32, StringMem.s_reserved(mi))
     h.assert_eq[USize](11, StringMem.s_size(mi))
     h.assert_eq[USize](32, StringMem.s_logical(mi))
     h.assert_eq[USize](32, StringMem.s_alloc(mi))

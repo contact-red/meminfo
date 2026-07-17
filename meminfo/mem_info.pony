@@ -55,11 +55,6 @@ The C shim is compiled and linked automatically by `ponyc`; it only needs the
 runtime's `pony.h`, which the `cinclude` below points at.
 """
 
-// ENVIRONMENT-SPECIFIC: path to the active ponyc install's `include` directory
-// (the one holding `pony.h`). Update this for your toolchain --- e.g. for a
-// ponyup install it is `<...>/ponyup/<toolchain>/include`.
-use "cinclude:/home/red/.local/share/ponyup/ponyc-clang-0.64.0-x86_64-linux-ubuntu24.04/include"
-
 use @mi_alloc_size[USize](o: Any tag)
 use @mi_logical_size[USize](o: Any tag)
 use @mi_addr_alloc_size[USize](addr: USize)
@@ -152,3 +147,4 @@ primitive MemInfo
       try out(2)? else 0 end,   // small_chunks
       try out(3)? else 0 end,   // large_chunks
       try out(4)? else 0 end)   // small_slots_used
+
