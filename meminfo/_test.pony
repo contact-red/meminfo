@@ -40,6 +40,15 @@ actor \nodoc\ Main is TestList
     test(Property1UnitTest[USize](_DeepSharingDegreeProperty))
     test(Property1UnitTest[USize](_DeepGraphSwarmProperty))
 
+    // Type stats.
+    test(_TestTypeStatsIncDec)
+    test(_TestTypeStatsUnknownKey)
+    test(_TestTypeStatsMultipleKeys)
+    test(_TestTypeStatsTrackedCount)
+    test(_TestTypeStatsSnapshot)
+    test(_TestTypeStatsSnapshotEmpty)
+    test(_TestTypeStatsLocTypeName)
+
     // Whole-actor heap walk.
     test(_TestActorHeapBaseline)
     test(_TestActorHeapDerivedFields)
